@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+
+use ignore::Walk;
 use tokio::fs;
 
 pub const SYSTEM_PROMPT: &str = r#"
@@ -40,9 +43,30 @@ pub async fn get_project_layout() -> anyhow::Result<String> {
     ));
     result.push_str(&format!("{}\n", current_dir.display()));
 
+    // TODO: Merge these into a single pass.
+    let mut non_ignored_paths = HashSet::new();
+    tokio::task::block_in_place(|| {
+        let mut iterator = Walk::new(&current_dir);
+        while let Some(entry) = iterator.next() {
+            if non_ignored_paths.len() > 100 {
+                break;
+            }
+            non_ignored_paths.insert(entry?.path().to_owned());
+        }
+        anyhow::Ok(())
+    })?;
+
+    let mut processed = 0;
     let root_metadata = fs::metadata(&current_dir).await?;
     let mut stack = vec![(0, current_dir, root_metadata)];
     while let Some((depth, path, metadata)) = stack.pop() {
+        processed += 1;
+        if processed > 100 {
+            break;
+        }
+        if !non_ignored_paths.contains(&path) {
+            continue;
+        }
         if depth > 0 {
             let space = "  ".repeat(depth);
             let suffix = if metadata.is_dir() {
